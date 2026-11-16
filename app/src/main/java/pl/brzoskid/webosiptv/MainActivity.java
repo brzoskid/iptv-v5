@@ -52,6 +52,7 @@ import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.security.SecureRandom;
 import java.security.cert.X509Certificate;
+import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.zip.GZIPInputStream;
@@ -98,7 +99,6 @@ public class MainActivity extends AppCompatActivity {
         initWebView();
     }
 
-    // Wymuszenie TLS 1.2 + zaufania dla wszystkich certyfikatów SSL (rozwiązuje problem ISRG Root X1 na Android 5.1.1)
     private void initTrustAllSsl() {
         try {
             TrustManager[] trustAllCerts = new TrustManager[]{
@@ -178,14 +178,13 @@ public class MainActivity extends AppCompatActivity {
         }
     }
 
-    // Dedykowana fabryka HttpDataSource dla ExoPlayera wstrzykująca SSLSocketFactory do każdego połączenia HTTPS
     private class TrustAllHttpDataSource extends DefaultHttpDataSource {
         public TrustAllHttpDataSource() {
             super(USER_AGENT, 12000, 12000, true, null);
         }
 
         @Override
-        protected HttpURLConnection makeConnection(URL url, int httpMethod, @Nullable byte[] httpBody, long position, long length, boolean allowGzip, boolean followRedirects, java.util.Map<String, String> requestParameters) throws IOException {
+        protected HttpURLConnection makeConnection(URL url, int httpMethod, @Nullable byte[] httpBody, long position, long length, boolean allowGzip, boolean followRedirects, Map<String, String> requestParameters) throws IOException {
             if ("https".equalsIgnoreCase(url.getProtocol()) && trustAllSslSocketFactory != null) {
                 HttpsURLConnection.setDefaultSSLSocketFactory(trustAllSslSocketFactory);
                 HttpsURLConnection.setDefaultHostnameVerifier(trustAllHostnameVerifier);
@@ -222,7 +221,7 @@ public class MainActivity extends AppCompatActivity {
             protected HttpDataSource createDataSourceInternal(HttpDataSource.RequestProperties defaultRequestProperties) {
                 TrustAllHttpDataSource ds = new TrustAllHttpDataSource();
                 if (defaultRequestProperties != null) {
-                    for (java.util.Map.Entry<String, String> entry : defaultRequestProperties.getSnapshot().entrySet()) {
+                    for (Map.Entry<String, String> entry : defaultRequestProperties.getSnapshot().entrySet()) {
                         ds.setRequestProperty(entry.getKey(), entry.getValue());
                     }
                 }
@@ -264,11 +263,19 @@ public class MainActivity extends AppCompatActivity {
                 } else if (error.type == ExoPlaybackException.TYPE_RENDERER && error.getRendererException() != null) {
                     details = "Dekoder: " + error.getRendererException().getMessage();
                 }
-                String safeDetails = details.replace("'", "").replace(""", "").replace("
-", " ");
+                String safeDetails = sanitizeForJs(details);
                 notifyJs("showStatus && showStatus('Błąd ExoPlayer: " + safeDetails + "', false)");
             }
         });
+    }
+
+    private String sanitizeForJs(String input) {
+        if (input == null) return "";
+        return input.replace("\\", "\\\\")
+                .replace("'", "")
+                .replace("\"", "")
+                .replace("\r", " ")
+                .replace("\n", " ");
     }
 
     @SuppressLint({"SetJavaScriptEnabled", "AddJavascriptInterface"})
@@ -315,7 +322,7 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void sendKeyToJs(String jsKey) {
-        String safeKey = jsKey.replace("'", "'");
+        String safeKey = sanitizeForJs(jsKey);
         String script = "(function(){" +
                 "document.dispatchEvent(new KeyboardEvent('keydown', { key: '" + safeKey + "', bubbles: true }));" +
                 "})();";
@@ -456,7 +463,6 @@ public class MainActivity extends AppCompatActivity {
         });
     }
 
-    // Pobieranie M3U i XMLTV bezpośrednio w Javie z obsługą przekierowań, GZIP i obejściem SSL dla Android 5.1
     private String downloadUrlWithSslBypass(String urlString) throws Exception {
         String currentUrl = urlString;
         int redirects = 0;
@@ -518,7 +524,6 @@ public class MainActivity extends AppCompatActivity {
             jsInputActive = focused;
         }
 
-        // Asynchroniczne pobieranie M3U lub XMLTV w Javie i zwrot treści w Base64 do JS
         @JavascriptInterface
         public void fetchUrlAsync(final String requestId, final String url) {
             networkExecutor.execute(() -> {
@@ -527,9 +532,8 @@ public class MainActivity extends AppCompatActivity {
                     String b64 = Base64.encodeToString(content.getBytes(StandardCharsets.UTF_8), Base64.NO_WRAP);
                     notifyJs("window.__onNativeFetchSuccess && window.__onNativeFetchSuccess('" + requestId + "', '" + b64 + "')");
                 } catch (Exception e) {
-                    String errMsg = (e.getClass().getSimpleName() + ": " + (e.getMessage() != null ? e.getMessage() : ""))
-                            .replace("'", "").replace(""", "").replace("
-", " ");
+                    String rawMsg = e.getMessage() != null ? e.getMessage() : "";
+                    String errMsg = sanitizeForJs(e.getClass().getSimpleName() + ": " + rawMsg);
                     notifyJs("window.__onNativeFetchError && window.__onNativeFetchError('" + requestId + "', '" + errMsg + "')");
                 }
             });
