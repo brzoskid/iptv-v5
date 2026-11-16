@@ -17,7 +17,6 @@ import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
 
-import androidx.annotation.Nullable;
 import androidx.appcompat.app.AppCompatActivity;
 
 import com.google.android.exoplayer2.C;
@@ -36,8 +35,7 @@ import com.google.android.exoplayer2.trackselection.MappingTrackSelector;
 import com.google.android.exoplayer2.ui.AspectRatioFrameLayout;
 import com.google.android.exoplayer2.ui.PlayerView;
 import com.google.android.exoplayer2.upstream.DefaultDataSourceFactory;
-import com.google.android.exoplayer2.upstream.DefaultHttpDataSource;
-import com.google.android.exoplayer2.upstream.HttpDataSource;
+import com.google.android.exoplayer2.upstream.DefaultHttpDataSourceFactory;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -52,7 +50,6 @@ import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.security.SecureRandom;
 import java.security.cert.X509Certificate;
-import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.zip.GZIPInputStream;
@@ -78,7 +75,7 @@ public class MainActivity extends AppCompatActivity {
 
     private SSLSocketFactory trustAllSslSocketFactory;
     private HostnameVerifier trustAllHostnameVerifier;
-    private HttpDataSource.Factory customHttpDataSourceFactory;
+    private DefaultHttpDataSourceFactory httpDataSourceFactory;
     private final ExecutorService networkExecutor = Executors.newCachedThreadPool();
 
     @SuppressLint({"SetJavaScriptEnabled", "AddJavascriptInterface"})
@@ -173,28 +170,9 @@ public class MainActivity extends AppCompatActivity {
 
             HttpsURLConnection.setDefaultSSLSocketFactory(trustAllSslSocketFactory);
             HttpsURLConnection.setDefaultHostnameVerifier(trustAllHostnameVerifier);
+            SSLContext.setDefault(sslContext);
         } catch (Exception e) {
             e.printStackTrace();
-        }
-    }
-
-    private class TrustAllHttpDataSource extends DefaultHttpDataSource {
-        public TrustAllHttpDataSource() {
-            super(USER_AGENT, 12000, 12000, true, null);
-        }
-
-        @Override
-        protected HttpURLConnection makeConnection(URL url, int httpMethod, @Nullable byte[] httpBody, long position, long length, boolean allowGzip, boolean followRedirects, Map<String, String> requestParameters) throws IOException {
-            if ("https".equalsIgnoreCase(url.getProtocol()) && trustAllSslSocketFactory != null) {
-                HttpsURLConnection.setDefaultSSLSocketFactory(trustAllSslSocketFactory);
-                HttpsURLConnection.setDefaultHostnameVerifier(trustAllHostnameVerifier);
-            }
-            HttpURLConnection conn = super.makeConnection(url, httpMethod, httpBody, position, length, allowGzip, followRedirects, requestParameters);
-            if (conn instanceof HttpsURLConnection && trustAllSslSocketFactory != null) {
-                ((HttpsURLConnection) conn).setSSLSocketFactory(trustAllSslSocketFactory);
-                ((HttpsURLConnection) conn).setHostnameVerifier(trustAllHostnameVerifier);
-            }
-            return conn;
         }
     }
 
@@ -216,20 +194,14 @@ public class MainActivity extends AppCompatActivity {
                 .setBufferDurationsMs(4000, 20000, 1500, 2500)
                 .build();
 
-        customHttpDataSourceFactory = new HttpDataSource.BaseFactory() {
-            @Override
-            protected HttpDataSource createDataSourceInternal(HttpDataSource.RequestProperties defaultRequestProperties) {
-                TrustAllHttpDataSource ds = new TrustAllHttpDataSource();
-                if (defaultRequestProperties != null) {
-                    for (Map.Entry<String, String> entry : defaultRequestProperties.getSnapshot().entrySet()) {
-                        ds.setRequestProperty(entry.getKey(), entry.getValue());
-                    }
-                }
-                return ds;
-            }
-        };
+        httpDataSourceFactory = new DefaultHttpDataSourceFactory(
+                USER_AGENT,
+                12000,
+                12000,
+                true
+        );
 
-        DefaultDataSourceFactory dataSourceFactory = new DefaultDataSourceFactory(this, customHttpDataSourceFactory);
+        DefaultDataSourceFactory dataSourceFactory = new DefaultDataSourceFactory(this, httpDataSourceFactory);
 
         player = new SimpleExoPlayer.Builder(this)
                 .setTrackSelector(trackSelector)
@@ -543,11 +515,15 @@ public class MainActivity extends AppCompatActivity {
         public void playStream(final String url) {
             runOnUiThread(() -> {
                 if (player == null || url == null || url.isEmpty()) return;
+                if (trustAllSslSocketFactory != null) {
+                    HttpsURLConnection.setDefaultSSLSocketFactory(trustAllSslSocketFactory);
+                    HttpsURLConnection.setDefaultHostnameVerifier(trustAllHostnameVerifier);
+                }
                 Uri uri = Uri.parse(url);
                 MediaItem mediaItem = MediaItem.fromUri(uri);
 
                 if (url.toLowerCase().contains(".m3u8")) {
-                    HlsMediaSource hlsSource = new HlsMediaSource.Factory(customHttpDataSourceFactory)
+                    HlsMediaSource hlsSource = new HlsMediaSource.Factory(httpDataSourceFactory)
                             .setAllowChunklessPreparation(true)
                             .createMediaSource(mediaItem);
                     player.setMediaSource(hlsSource);
